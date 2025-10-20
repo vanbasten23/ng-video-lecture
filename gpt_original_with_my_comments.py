@@ -5,7 +5,7 @@ from torch.nn import functional as F
 # hyperparameters
 batch_size = 64 # how many independent sequences will we process in parallel?
 block_size = 256 # what is the maximum context length for predictions?
-max_iters = 5000
+max_iters = 500
 eval_interval = 500
 learning_rate = 3e-4
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -19,7 +19,7 @@ dropout = 0.2
 torch.manual_seed(1337)
 
 # wget https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt
-with open('input.txt', 'r', encoding='utf-8') as f:
+with open('/home/xiowei/github/myforks/ng-video-lecture/input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
 
 # here are all the unique characters that occur in this text
@@ -42,7 +42,14 @@ def get_batch(split):
     # generate a small batch of data of inputs x and targets y
     data = train_data if split == 'train' else val_data
     ix = torch.randint(len(data) - block_size, (batch_size,))
+    # batch_size=64,
+    # torch.randint(low=0, high, size,*,...). Returns a tensor filled with
+    # random integers generated uniformly between low (inclusive) and high (exclusive).
+    # The shape of the tensor is defined by the variable argument size.
+    # len(data)=100384, block_size=256, ix=tensor([678229,...,800907])
+    # ix.shape=torch.Size([64]). data[0].shape=torch.Size([]), data[0]=tensor(18).
     x = torch.stack([data[i:i+block_size] for i in ix])
+    # data[0:0+block_size].shape=torch.Size([256]). x.shape=[64, 256]
     y = torch.stack([data[i+1:i+block_size+1] for i in ix])
     x, y = x.to(device), y.to(device)
     return x, y
@@ -100,7 +107,6 @@ class MultiHeadAttention(nn.Module):
 
     def forward(self, x):
         # x: (B,T,C)=[64, 256, 384]
-        import pdb; pdb.set_trace()
         # self.heads[0](x).shape: [64, 256, 64], 
         out = torch.cat([h(x) for h in self.heads], dim=-1)  # (B,T,C)=[64, 256, 384], xw32 note, it concatenate the head_size dimension.
         # self.proj(out).shape=[64, 256, 384]
@@ -146,6 +152,7 @@ class GPTLanguageModel(nn.Module):
     def __init__(self):
         super().__init__()
         # each token directly reads off the logits for the next token from a lookup table
+        # vocab_size=65, n_embd=384
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
         self.blocks = nn.Sequential(*[Block(n_embd, n_head=n_head) for _ in range(n_layer)])
@@ -153,6 +160,10 @@ class GPTLanguageModel(nn.Module):
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
         # better init, not covered in the original GPT video, but important, will cover in followup video
+        # Why use self.apply instead of just calling self._init_weights?
+        # According to the comment of nn.Module.apply:
+        # Apply ``fn`` recursively to every submodule (as returned by ``.children()``) as well as self.
+        # Typical use includes initializing the parameters of a model
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
@@ -164,15 +175,18 @@ class GPTLanguageModel(nn.Module):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     def forward(self, idx, targets=None):
-        B, T = idx.shape
+        B, T = idx.shape  # B, T = 64, 256. Remember:
+        # batch_size = 64 # how many independent sequences will we process in parallel?
+        # block_size = 256 # what is the maximum context length for predictions?
 
         # idx and targets are both (B,T) tensor of integers
+        # C is n_embd (384).
         tok_emb = self.token_embedding_table(idx) # (B,T,C)
         pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (T,C)
         x = tok_emb + pos_emb # (B,T,C)
         x = self.blocks(x) # (B,T,C)
         x = self.ln_f(x) # (B,T,C)
-        logits = self.lm_head(x) # (B,T,vocab_size)
+        logits = self.lm_head(x) # (B,T,vocab_size). vocab_size=65.
 
         if targets is None:
             loss = None
@@ -190,11 +204,11 @@ class GPTLanguageModel(nn.Module):
             # crop idx to the last block_size tokens
             idx_cond = idx[:, -block_size:]
             # get the predictions
-            logits, loss = self(idx_cond)
+            logits, loss = self(idx_cond) # [B, T, vocab_size]
             # focus only on the last time step
-            logits = logits[:, -1, :] # becomes (B, C)
+            logits = logits[:, -1, :] # becomes (B, vocab_size)
             # apply softmax to get probabilities
-            probs = F.softmax(logits, dim=-1) # (B, C)
+            probs = F.softmax(logits, dim=-1) # (B, vocab_size)
             # sample from the distribution
             idx_next = torch.multinomial(probs, num_samples=1) # (B, 1)
             # append sampled index to the running sequence
@@ -226,6 +240,8 @@ for iter in range(max_iters):
     optimizer.step()
 
 # generate from the model
+# Why is the context below in this shape (1, 2)?
+# It's (B, T)
 context = torch.zeros((1, 2), dtype=torch.long, device=device)
 print(decode(m.generate(context, max_new_tokens=500)[0].tolist()))
 #open('more.txt', 'w').write(decode(m.generate(context, max_new_tokens=10000)[0].tolist()))
